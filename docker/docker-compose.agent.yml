@@ -1,0 +1,27 @@
+name: ghostfolio_agent
+services:
+  ghostfolio:
+    extends:
+      file: docker-compose.yml
+      service: ghostfolio
+    container_name: gf-agent
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-ghostfolio-agent}
+
+  postgres:
+    extends:
+      file: docker-compose.yml
+      service: postgres
+    container_name: gf-postgres-agent
+
+  redis:
+    extends:
+      file: docker-compose.yml
+      service: redis
+    container_name: gf-redis-agent
+
+volumes:
+  postgres:

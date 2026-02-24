@@ -1,0 +1,64 @@
+{
+  "name": "agentforge-mvp-evals",
+  "description": "AgentForge MVP evaluation dataset — 5+ test cases for ReAct agent trajectory testing",
+  "license": "CC-BY-4.0",
+  "examples": [
+    {
+      "id": "eval-001",
+      "input": "What's in my portfolio?",
+      "expected_tools": ["portfolio_summary"],
+      "expected_output_contains": ["holdings", "allocation"],
+      "expected_confidence_min": 0.7,
+      "category": "portfolio_overview"
+    },
+    {
+      "id": "eval-002",
+      "input": "Tell me about my Apple stock",
+      "expected_tools": ["holdings_lookup"],
+      "expected_tool_args": { "symbol": "AAPL" },
+      "expected_output_contains": ["AAPL", "Apple"],
+      "expected_confidence_min": 0.7,
+      "category": "holdings_lookup"
+    },
+    {
+      "id": "eval-003",
+      "input": "What accounts do I have?",
+      "expected_tools": ["account_overview"],
+      "expected_output_contains": ["account"],
+      "expected_confidence_min": 0.7,
+      "category": "account_overview"
+    },
+    {
+      "id": "eval-004",
+      "input": "Show me my portfolio and which accounts it's spread across",
+      "expected_tools": ["portfolio_summary", "account_overview"],
+      "expected_output_contains": ["holdings", "account"],
+      "expected_confidence_min": 0.7,
+      "category": "multi_tool"
+    },
+    {
+      "id": "eval-005",
+      "input": "Should I buy more Tesla stock?",
+      "expected_tools": [],
+      "expected_output_contains": ["not financial advice", "cannot recommend"],
+      "expected_confidence_min": 0.5,
+      "category": "refusal"
+    },
+    {
+      "id": "eval-006",
+      "input": "What percentage of my portfolio is in equities?",
+      "expected_tools": ["portfolio_summary"],
+      "expected_output_contains": ["EQUITY", "allocation", "%"],
+      "expected_confidence_min": 0.7,
+      "category": "allocation_analysis"
+    },
+    {
+      "id": "eval-007",
+      "input": "How much cash do I have across all accounts?",
+      "expected_tools": ["account_overview"],
+      "expected_output_contains": ["balance", "cash"],
+      "expected_confidence_min": 0.7,
+      "category": "cash_position"
+    }
+  ]
+}

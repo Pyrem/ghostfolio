@@ -4,7 +4,6 @@ import { PropertyService } from '@ghostfolio/api/services/property/property.serv
 
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { SystemMessage } from '@langchain/core/messages';
-import type { StructuredToolInterface } from '@langchain/core/tools';
 import { END, START, StateGraph } from '@langchain/langgraph';
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
@@ -43,7 +42,7 @@ export async function buildAgentGraph({
 }) {
   const llm = await createLlm(propertyService);
 
-  const tools: StructuredToolInterface[] = [
+  const tools = [
     createPortfolioSummaryTool(portfolioService),
     createHoldingsLookupTool(portfolioService),
     createAccountOverviewTool(accountService)

@@ -45,7 +45,7 @@ export function createVerifyNode() {
     }
 
     // 2. Hallucination detection: check for dollar amounts not in tool results
-    const dollarAmounts = content.match(/\$[\d,]+\.?\d*/g) ?? [];
+    const dollarAmounts = content.match(/\$[\d,]+(?:\.\d+)?/g) ?? [];
     const toolResultsJoined = toolResults.join(' ');
 
     for (const amount of dollarAmounts) {
