@@ -2,6 +2,7 @@ import { TokenStorageService } from '@ghostfolio/client/services/token-storage.s
 
 import { CommonModule } from '@angular/common';
 import {
+  CUSTOM_ELEMENTS_SCHEMA,
   ChangeDetectionStrategy,
   ChangeDetectorRef,
   Component,
@@ -33,6 +34,7 @@ interface ChatMessage {
     MatInputModule,
     MatProgressSpinnerModule
   ],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
   selector: 'gf-chat-page',
   styleUrls: ['./chat-page.scss'],
   templateUrl: './chat-page.html'
@@ -146,7 +148,7 @@ export class GfChatPageComponent implements OnDestroy {
 
         return processStream();
       })
-      .catch((error) => {
+      .catch(() => {
         const assistantMsg = this.messages[this.messages.length - 1];
 
         if (assistantMsg?.role === 'assistant') {
