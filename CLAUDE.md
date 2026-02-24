@@ -18,8 +18,8 @@ Ghostfolio is a privacy-first, open-source personal finance dashboard for tracki
 
 AgentForge adds a **new, independent `AgentModule`** — separate from the existing `AiModule` — providing a full conversational agent:
 
-- **LangGraph TS StateGraph** — 6-node pipeline: `query → plan → execute → verify → disclaim → respond`
-- **Model-agnostic LLM provider** — defaults to Claude Sonnet 4 via `@langchain/anthropic`, swappable to any provider
+- **LangGraph TS ReAct Agent** — `createReactAgent` with tool-calling loop + verify/disclaim post-nodes
+- **Model-agnostic LLM provider** — defaults to Claude Sonnet 4.5 via `@langchain/anthropic`, swappable to any provider
 - **7 tools** wrapping existing Ghostfolio services (portfolio summary, performance, holdings, activities, market data, risk analysis, account overview)
 - **Real-time streaming** — Server-Sent Events (SSE) for streaming AI responses via `POST /api/v1/agents/chat`
 - **Conversation memory** — LangGraph checkpointer persisted to PostgreSQL (no custom Prisma models needed)
@@ -247,26 +247,36 @@ Ghostfolio has an existing lightweight `AiModule` (from PR #4176). AgentForge do
 
 **New, independent `AgentModule`** — does not modify or depend on the existing `AiModule`. Clean separation, own endpoints, own state management.
 
-### Architecture: LangGraph TS StateGraph (6 Nodes)
+### Architecture: LangGraph TS ReAct Agent + Post-Nodes
+
+Uses `createReactAgent` from `@langchain/langgraph` for the core reasoning loop, with **verify** and **disclaim** as post-processing nodes.
 
 ```
 User message
     │
     ▼
-┌─────────┐   ┌────────┐   ┌───────────┐   ┌──────────┐   ┌───────────┐   ┌───────────┐
-│  Query   │──▶│  Plan  │──▶│  Execute  │──▶│  Verify  │──▶│ Disclaim  │──▶│  Respond  │
-│  (parse) │   │(decide)│   │  (tools)  │   │ (checks) │   │(caveats)  │   │ (stream)  │
-└─────────┘   └────────┘   └───────────┘   └──────────┘   └───────────┘   └───────────┘
+┌──────────────────────────────────────┐
+│         ReAct Loop (LangGraph)       │
+│                                      │
+│  LLM Reason ──▶ tool_calls? ──yes──▶ Execute Tools ──▶ Observe Results ──┐
+│       ▲                                                                   │
+│       └───────────────────────────────────────────────────────────────────┘
+│                    │ no
+└────────────────────┘
+                     │
+                     ▼
+              ┌──────────┐   ┌───────────┐
+              │  Verify  │──▶│ Disclaim  │──▶ Streamed Response
+              │ (checks) │   │ (caveats) │
+              └──────────┘   └───────────┘
 ```
 
-| Node | Purpose |
-|------|---------|
-| **Query** | Parse user input, classify intent, extract entities |
-| **Plan** | Decide which tools to call and in what order |
-| **Execute** | Run tools via LangGraph tool-calling loop (may cycle back to Plan) |
-| **Verify** | Domain-specific validation — sanity-check numbers, flag stale data, validate ranges |
-| **Disclaim** | Inject financial disclaimers ("not financial advice", data freshness caveats) |
-| **Respond** | Format final response and stream via SSE |
+The ReAct agent handles query understanding, planning, and tool execution dynamically. The post-nodes add domain-specific guarantees:
+
+| Post-Node | Purpose |
+|-----------|---------|
+| **Verify** | 5 verification types: fact-check tool outputs, hallucination detection, confidence scoring (70% threshold), domain constraint validation, output format validation |
+| **Disclaim** | Inject financial disclaimers ("not financial advice", data freshness caveats, stale data warnings) |
 
 ### Module Structure
 
@@ -276,23 +286,19 @@ apps/api/src/app/endpoints/agents/
 ├── agent.controller.ts                # REST + SSE endpoints
 ├── agent.service.ts                   # Core orchestration — builds and invokes the graph
 ├── graph/
-│   ├── agent.graph.ts                 # StateGraph definition with 6 nodes
+│   ├── agent.graph.ts                 # createReactAgent + post-node wiring
 │   ├── state.ts                       # AgentState type definition
 │   └── nodes/
-│       ├── query.node.ts              # Intent classification + entity extraction
-│       ├── plan.node.ts               # Tool selection + execution planning
-│       ├── execute.node.ts            # Tool invocation via LangGraph
-│       ├── verify.node.ts             # Domain-specific output validation
-│       ├── disclaim.node.ts           # Financial disclaimer injection
-│       └── respond.node.ts            # Response formatting + SSE streaming
+│       ├── verify.node.ts             # Post-node: 5-type verification (fact-check, hallucination, confidence, domain, output)
+│       └── disclaim.node.ts           # Post-node: financial disclaimer injection
 ├── tools/
 │   ├── portfolio-summary.tool.ts      # Wraps PortfolioService.getDetails()
 │   ├── portfolio-performance.tool.ts  # Wraps PortfolioService.getPerformance()
-│   ├── holdings-detail.tool.ts        # Wraps PortfolioService.getHoldings()
-│   ├── activity-history.tool.ts       # Wraps OrderService
+│   ├── holdings-lookup.tool.ts        # Wraps PortfolioService (by symbol/assetClass)
+│   ├── activity-search.tool.ts        # Wraps OrderService
 │   ├── market-data.tool.ts            # Wraps DataProviderService
 │   ├── account-overview.tool.ts       # Wraps AccountService
-│   └── risk-report.tool.ts            # Wraps RulesService + portfolio rules
+│   └── risk-analysis.tool.ts          # Wraps PortfolioService X-ray
 ├── providers/
 │   └── llm-provider.ts               # Model-agnostic LLM provider interface
 └── streaming/
@@ -310,17 +316,17 @@ apps/api/src/app/endpoints/agents/
 
 ### 7 Tools (LangGraph `DynamicStructuredTool`)
 
-Each tool wraps an existing Ghostfolio service — **no duplicate business logic**.
+Each tool wraps an existing Ghostfolio service — **no duplicate business logic**. All tools receive `userId` from auth session (never from user input). All return a standard envelope: `{ success: boolean, data: T, error?: string, confidence: number }`.
 
 | Tool Name | Wraps | Input Schema | Returns |
 |-----------|-------|-------------|---------|
-| `portfolio_summary` | `PortfolioService.getDetails()` | filters (accounts, tags, assetClasses) | Holdings with allocations, sectors, currencies |
-| `portfolio_performance` | `PortfolioService.getPerformance()` | dateRange, filters | ROI, TWR, MWR, chart data |
-| `holdings_detail` | `PortfolioService.getHoldings()` | symbol (optional), filters | Quantity, price, P&L per holding |
-| `activity_history` | `OrderService.getOrders()` | symbol, type, dateRange | Filtered transaction history |
+| `portfolio_summary` | `PortfolioService.getDetails()` | userId (from session) | Holdings with allocations, sectors, currencies |
+| `portfolio_performance` | `PortfolioService.getPerformance()` | userId, range (1d–Max) | ROI, TWR, MWR, chart data |
+| `holdings_lookup` | `PortfolioService` | userId, symbol/assetClass (optional) | Quantity, price, P&L per holding |
+| `activity_search` | `OrderService.getOrders()` | userId, symbol, type, dateRange | Filtered transaction history |
 | `market_data` | `DataProviderService.getQuotes()` | symbols[] | Current quotes, daily change, market state |
-| `risk_report` | `RulesService` + portfolio rules | filters | Rule evaluations (cluster risk, currency risk, etc.) |
-| `account_overview` | `AccountService.getAccounts()` | accountId (optional) | Account balances, platforms, cash positions |
+| `risk_analysis` | `PortfolioService` X-ray | userId | Rule evaluations (cluster risk, currency risk, etc.) |
+| `account_overview` | `AccountService.getAccounts()` | userId, accountId (optional) | Account balances, platforms, cash positions |
 
 ### Conversation Memory
 
@@ -330,13 +336,13 @@ Each conversation is identified by a `thread_id` (UUID). The checkpointer stores
 
 ### LLM Provider
 
-Model-agnostic provider interface with **Claude Sonnet 4** as default:
+Model-agnostic provider interface with **Claude Sonnet 4.5** as default:
 
 ```typescript
 // providers/llm-provider.ts
 import { ChatAnthropic } from '@langchain/anthropic';
 
-// Default: Claude Sonnet 4 via Anthropic API
+// Default: Claude Sonnet 4.5 via Anthropic API
 // Swappable to OpenAI, OpenRouter, or any @langchain/* provider
 ```
 
@@ -359,17 +365,66 @@ New lazy-loaded Angular route at `/chat`:
 - Admin-configurable via `PROPERTY_LANGSMITH_API_KEY` in PropertyService
 - Tracing can be toggled on/off without redeployment
 
+### Verification Design (5 Types)
+
+| Type | What It Checks |
+|------|---------------|
+| **Fact-check** | Cross-reference tool outputs against each other (e.g., holdings total matches portfolio summary) |
+| **Hallucination detection** | Ensure all numbers/symbols in the response came from tool results, not LLM generation |
+| **Confidence scoring** | Score response confidence 0–100%; if below **70% threshold**, add caveat or refuse to answer |
+| **Domain constraints** | Validate financial logic (e.g., allocation percentages sum to ~100%, no negative holdings) |
+| **Output validation** | Ensure response format is well-structured, no truncated data, proper currency formatting |
+
+### Security
+
+- **Auth-session userId** — tools receive userId from JWT session, never from user input
+- **Zod schema validation** — all tool inputs validated via Zod schemas before execution
+- **Env var secrets** — API keys stored via PropertyService (DB), never hardcoded
+- **PII masking** — account numbers and sensitive data masked in LangSmith traces
+
+### Performance Targets
+
+| Metric | Target |
+|--------|--------|
+| Single-tool query | <5 seconds |
+| Multi-step query | <15 seconds |
+| Cost per query | ~$0.012 |
+
+### Reliability Guarantees
+
+- **Read-only** — agent never writes to the database; all tools are read-only wrappers
+- **All data from tools** — agent must cite tool results; no fabricated financial data
+- **70% confidence threshold** — below threshold, agent adds explicit uncertainty caveat
+- **Refuses investment advice** — always disclaims "not financial advice"
+
 ### Key Design Principles
 
 1. **Independent module** — `AgentModule` is fully separate from `AiModule`; no shared state, no shared code
 2. **Wrap, don't replace** — tools call existing services; no duplicate business logic
-3. **6-node pipeline** — query → plan → execute → verify → disclaim → respond
-4. **Verify node** — domain-specific validation (sanity-check portfolio values, flag stale data, validate date ranges)
-5. **Disclaim node** — automatic financial disclaimers on all responses
+3. **ReAct + post-nodes** — `createReactAgent` handles reasoning/planning/execution; verify + disclaim run after
+4. **Verify post-node** — 5-type verification (fact-check, hallucination, confidence, domain, output)
+5. **Disclaim post-node** — automatic financial disclaimers on all responses
 6. **Streaming-first** — all chat responses use SSE for real-time token delivery
 7. **Model-agnostic** — swap LLM provider without code changes; just update PropertyService
 8. **LangGraph-native memory** — checkpointer handles conversation persistence, no custom ORM models
 9. **Auditable** — LangSmith tracing for all tool invocations
+
+### Documentation Strategy (6 Layers)
+
+| Layer | Purpose |
+|-------|---------|
+| **TSDoc** | Inline doc comments on all public methods and interfaces |
+| **Compodoc** | Auto-generated API reference from TSDoc |
+| **ADRs** | Architecture Decision Records for key design choices (in `docs/adr/`) |
+| **CLAUDE.md** | This file — high-level architecture and conventions |
+| **Swagger/OpenAPI** | Auto-generated REST API docs via NestJS decorators |
+| **DEVLOG.md** | Running development log with decisions, blockers, and progress |
+
+### Deployment
+
+- **Docker Compose extension** — new `docker-compose.agent.yml` adds agent service alongside existing infra
+- **Railway / Fly.io** — cloud deployment target for public accessibility
+- **Feature flag kill switch** — agent can be disabled via PropertyService without redeployment
 
 ---
 
@@ -379,15 +434,38 @@ All items required to pass:
 
 | # | Requirement | Implementation |
 |---|------------|----------------|
-| 1 | Agent responds to natural language queries | LangGraph StateGraph with Claude Sonnet 4 |
-| 2 | At least 3 functional tools | `portfolio_summary`, `holdings_detail`, `account_overview` |
-| 3 | Tool calls execute successfully with structured results | Tools wrap existing services, return typed JSON |
-| 4 | Agent synthesizes tool results into coherent responses | Respond node formats tool outputs into natural language |
+| 1 | Agent responds to natural language queries | LangGraph `createReactAgent` with Claude Sonnet 4.5 |
+| 2 | At least 3 functional tools | `portfolio_summary`, `holdings_lookup`, `account_overview` (+ `portfolio_performance`, `market_data` stretch) |
+| 3 | Tool calls execute successfully with structured results | Tools wrap existing services, return `{ success, data, error, confidence }` |
+| 4 | Agent synthesizes tool results into coherent responses | ReAct agent formats tool outputs into natural language |
 | 5 | Conversation history maintained across turns | LangGraph checkpointer to PostgreSQL |
-| 6 | Basic error handling (graceful failure, not crashes) | Try/catch in each node, fallback error messages |
-| 7 | At least one domain-specific verification check | Verify node: validate portfolio totals, flag stale market data |
-| 8 | 5+ test cases with expected outcomes | Jest test suite in `agent.service.spec.ts` |
-| 9 | Deployed and publicly accessible | Docker build via existing `docker-compose.build.yml` |
+| 6 | Basic error handling (graceful failure, not crashes) | Try/catch in tool wrappers, fallback error messages, confidence scoring |
+| 7 | At least one domain-specific verification check | Verify post-node: validate portfolio totals, hallucination detection, 70% confidence threshold |
+| 8 | 5+ test cases with expected outcomes | Vitest unit tests + 5+ eval test cases in LangSmith dataset |
+| 9 | Deployed and publicly accessible | Docker Compose extension via `docker-compose.agent.yml` |
+
+### MVP Build Priority (~20 hours)
+
+| Step | Task | Time |
+|------|------|------|
+| 1 | Install deps (`@langchain/langgraph`, `@langchain/anthropic`, `@langchain/langgraph-checkpoint-postgres`) | 30m |
+| 2 | Scaffold `AgentModule` (module + controller + service) | 1h |
+| 3 | LLM provider interface + PropertyService integration | 1h |
+| 4 | `portfolio_summary` tool (wraps PortfolioService.getDetails) | 2h |
+| 5 | `holdings_lookup` tool (wraps PortfolioService) | 1.5h |
+| 6 | `account_overview` tool (wraps AccountService) | 1.5h |
+| 7 | StateGraph with ReAct agent + verify/disclaim post-nodes | 3h |
+| 8 | SSE streaming endpoint (`POST /api/v1/agents/chat`) | 2h |
+| 9 | LangGraph checkpointer (PostgreSQL) for conversation memory | 1.5h |
+| 10 | Conversation CRUD endpoints (list, get, delete) | 1h |
+| 11 | Minimal chat page (`/chat` route, Angular) | 2h |
+| 12 | Vitest tests + LangSmith eval dataset (5+ cases) | 2h |
+| 13 | Docker Compose extension + deployment | 1h |
+
+### Licensing
+
+- **Code**: AGPLv3 (matching Ghostfolio)
+- **Eval dataset**: CC-BY-4.0
 
 ---
 
@@ -397,7 +475,7 @@ All items required to pass:
 - **Frontend patterns**: Angular standalone components, lazy-loaded routes, Angular Material UI
 - **Naming**: PascalCase for classes/interfaces, camelCase for variables/functions, kebab-case for file names
 - **Imports**: Use `@ghostfolio/` path aliases — never relative paths across app/lib boundaries
-- **Testing**: Jest for all tests; test files co-located with source as `*.spec.ts`
+- **Testing**: Jest for existing Ghostfolio tests; **Vitest + LangSmith Evals** for AgentForge agent tests. Test files co-located with source as `*.spec.ts`
 - **Database changes**: Always update `prisma/schema.prisma`, then run `npm run database:push` or create a migration
 - **Shared types**: Define interfaces in `libs/common/src/lib/interfaces/`, export via barrel files
 - **UI components**: Reusable components go in `libs/ui/`, page-specific components stay in `apps/client/`
