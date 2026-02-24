@@ -37,6 +37,15 @@ export const routes: Routes = [
     title: internalRoutes.api.title
   },
   {
+    canActivate: [AuthGuard],
+    loadComponent: () =>
+      import('./pages/chat/chat-page.component').then(
+        (c) => c.GfChatPageComponent
+      ),
+    path: internalRoutes.chat.path,
+    title: internalRoutes.chat.title
+  },
+  {
     path: internalRoutes.auth.path,
     loadChildren: () =>
       import('./pages/auth/auth-page.routes').then((m) => m.routes),

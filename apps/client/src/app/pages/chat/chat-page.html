@@ -1,0 +1,67 @@
+<div class="chat-container d-flex flex-column h-100">
+  <div class="chat-header px-3 py-2">
+    <h4 class="m-0" i18n>Chat</h4>
+  </div>
+
+  <div #messagesContainer class="flex-grow-1 messages-container overflow-auto p-3">
+    @if (messages.length === 0) {
+      <div class="align-items-center d-flex flex-column h-100 justify-content-center text-muted">
+        <ion-icon class="mb-2" name="chatbubbles-outline" style="font-size: 3rem" />
+        <p i18n>Ask me about your portfolio, holdings, or accounts.</p>
+      </div>
+    }
+
+    @for (message of messages; track $index) {
+      <div
+        class="mb-3 message"
+        [class.message-user]="message.role === 'user'"
+        [class.message-assistant]="message.role === 'assistant'"
+      >
+        <div class="message-role text-muted mb-1" style="font-size: 0.75rem">
+          {{ message.role === 'user' ? 'You' : 'Agent' }}
+        </div>
+        <div class="message-content p-2 rounded">
+          @if (message.toolCalls?.length) {
+            <div class="mb-2 tool-calls" style="font-size: 0.8rem">
+              @for (tool of message.toolCalls; track tool) {
+                <span class="badge bg-secondary me-1">
+                  <ion-icon name="construct-outline" class="me-1" />
+                  {{ tool }}
+                </span>
+              }
+            </div>
+          }
+          <div [innerText]="message.content"></div>
+          @if (message.isStreaming && !message.content) {
+            <mat-spinner diameter="20" />
+          }
+        </div>
+      </div>
+    }
+  </div>
+
+  <div class="border-top input-container p-3">
+    <div class="d-flex gap-2">
+      <mat-form-field appearance="outline" class="flex-grow-1 without-hint">
+        <input
+          matInput
+          type="text"
+          autocomplete="off"
+          [disabled]="isLoading"
+          [(ngModel)]="inputMessage"
+          (keydown)="onKeyDown($event)"
+          placeholder="Ask about your portfolio..."
+          i18n-placeholder
+        />
+      </mat-form-field>
+      <button
+        mat-flat-button
+        color="primary"
+        [disabled]="isLoading || !inputMessage.trim()"
+        (click)="onSendMessage()"
+      >
+        <ion-icon name="send-outline" />
+      </button>
+    </div>
+  </div>
+</div>

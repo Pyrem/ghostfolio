@@ -1,0 +1,57 @@
+:host {
+  display: block;
+  height: calc(100vh - 4rem);
+
+  .chat-container {
+    max-width: 48rem;
+    margin: 0 auto;
+    height: 100%;
+  }
+
+  .chat-header {
+    border-bottom: 1px solid rgba(var(--dark-dividers));
+  }
+
+  .messages-container {
+    scroll-behavior: smooth;
+  }
+
+  .message-user {
+    .message-content {
+      background: rgba(var(--dark-dividers), 0.1);
+      margin-left: 2rem;
+    }
+  }
+
+  .message-assistant {
+    .message-content {
+      background: transparent;
+      margin-right: 2rem;
+      white-space: pre-wrap;
+    }
+  }
+
+  .tool-calls {
+    .badge {
+      font-weight: normal;
+    }
+  }
+
+  .input-container {
+    mat-form-field {
+      margin-bottom: -1.25em;
+    }
+  }
+}
+
+:host-context(.theme-dark) {
+  .chat-header {
+    border-color: rgba(var(--light-dividers));
+  }
+
+  .message-user {
+    .message-content {
+      background: rgba(var(--light-dividers), 0.1);
+    }
+  }
+}

@@ -74,6 +74,11 @@ export const internalRoutes: Record<string, InternalRoute> = {
     routerLink: ['/api'],
     title: 'Ghostfolio API'
   },
+  chat: {
+    path: 'chat',
+    routerLink: ['/chat'],
+    title: $localize`Chat`
+  },
   auth: {
     excludeFromAssistant: true,
     path: 'auth',
